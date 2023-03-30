@@ -9,19 +9,14 @@
 
 Header* buckets[NUM_BUCKETS] = { [0 ... (NUM_BUCKETS - 1)] = NULL };
 
-/*
- * initialize memory by adding the heads of the buckets
- */
-void
-mem_init()
-{
-  //todo: find something meaningful to do here
-}
+/**
+ * returns bucket for given size
+*/
 
 uint64_t
 bucket(uint64_t size) {
 
-  if (BUCKET_8(size)) {
+  if (BUCKET_16(size)) {
     return MIN_SIZE;
   }
 
@@ -37,49 +32,52 @@ bucket(uint64_t size) {
   return -1;
 }
 
-
+/**
+ * inserts new block in the corresponfing bucket
+ * new_blk == NULL => previous search didn't find a free block for the given size => inc. heap break/ memory map
+*/
 
 Header*
 blk_insert(uint64_t size, Header* new_blk)
 {
-  /* get size of bucket */
+  /* get bucket for given size */
   uint64_t bkt = bucket(size);
   assert(bkt > 0);
   
+  /* previous search didn't find a free block for the given size => inc. heap break/ memory map */
   if (new_blk == NULL) {
       
     new_blk = (bkt < PAGE_SIZE) ?
       sbrk(HEAP_INC(size)) :
       mmap(NULL, (size_t)PAGES(size), PROT_READ | PROT_WRITE, MAP_ANON, -1, 0);
       assert(new_blk != NULL);
-    
   }
 
+  /* insert new_blk as head of bucket */
   if (buckets[BUCKET_INDEX(bkt)] == NULL) {
 
     new_blk->next = new_blk;
     new_blk->prev = new_blk; 
-    new_blk->flags = ALIGN(size); 
+    new_blk->flags = ALLOC_SIZE(size); 
    
     /* add the footer */
-    *(Footer* )((char* )new_blk + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+    *(Footer* )((char* )new_blk + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALLOC_SIZE(size);
     
     buckets[BUCKET_INDEX(bkt)] = new_blk;
 
-    return buckets[BUCKET_INDEX(bkt)];
+    return new_blk;
 
   } else {
     
-    new_blk->flags = ALIGN(size);
+    new_blk->flags = ALLOC_SIZE(size);
     new_blk->prev = new_blk;
     new_blk->next = buckets[BUCKET_INDEX(bkt)];
     buckets[BUCKET_INDEX(bkt)]->prev = new_blk;
 
-    buckets[BUCKET_INDEX(bkt)] = new_blk; 
-
     /* add the footer */
-    *(Footer *)((char *)new_blk
-      + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+    *(Footer *)((char *)new_blk + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+
+    buckets[BUCKET_INDEX(bkt)] = new_blk;
 
     return new_blk;
 
@@ -87,13 +85,13 @@ blk_insert(uint64_t size, Header* new_blk)
 }
 
 /*
- * \Header* fb   free block needed to be removed from its free list
+ * remove free block from bucket
  */
 
 void
 blk_remove(Header* free_blk)
 {
-  /* it's head */
+  /* get bucket for given size */ 
   uint64_t size = free_blk->flags & ~1;
   uint64_t bkt = bucket(size);
 
@@ -107,10 +105,22 @@ blk_remove(Header* free_blk)
   free_blk->prev->next = free_blk->next;
 }
 
-/*
- * \Header* fb     free block that needs to be allocated -> assigned as alloc
- * \uint64_t size  the actual size NEEDED from that block to be allocated
- */
+/* mark block as allocated and rearrange header */
+//TODO: make defines and change the way blocks and pointers are sized!!!
+
+/** free block
+| 24 bytes                           | aligned to 8 bytes                        | 8 bytes  |
+| ---------------------------------- | ----------------------------------------- | -------- |
+| free block header                  | payload               | padding           | footer   |
+| ---------------------------------- | ----------------------------------------  | ---------|
+*/
+
+/** allocated block
+| 8 bytes                | aligned to 8 bytes                                    | 8 bytes  |
+| ---------------------- | ----------------------------------------------------- | -------- |
+| allocated block header | payload                             | padding         | footer   |
+| ---------- ----------- | ----------------------------------------------------- | ---------|
+*/
 
 void
 blk_alloc(Header* fb, uint64_t size)
@@ -119,7 +129,7 @@ blk_alloc(Header* fb, uint64_t size)
   uint64_t old_size = fb->flags & ~1;
   
   /* mark as allocated and update the size of the allocation */
-  fb->flags = ALIGN(size) | 1;
+  fb->flags = ALLOC_SIZE(size) | 1;
 
   /* update footer */
   *(Footer *)((char *)fb + HEAP_INC(size) - FOOTER_SIZE) = (Footer) fb->flags;
@@ -157,15 +167,19 @@ search_fb(uint64_t size)
   while (bkt <= MAX_SIZE) {
     /* get list head */
     Header* head = buckets[BUCKET_INDEX(bkt)];
-  
+    
+    if (head == NULL) {
+      bkt <<=2;
+      continue;
+    }
+
     Header* ptr = head;
-    /* search for free block */
-    for (; ptr->next != NULL; ptr = ptr->next) {
-      if (size < (ptr->flags & ~1)) {
+    /* search for free block */ //todo
+    for (; ptr->next != head; ptr = ptr->next) {
+      if (ALLOC_SIZE(size) < (ptr->flags & ~1)) {
         return ptr; /* will need to blk_alloc(this) */
       }
     }
-
     bkt <<= 2;
   }
 
@@ -222,7 +236,7 @@ split(Header* ab, uint64_t size)
    * */
  
   uint64_t rem_size = ALIGN(ab->flags & ~1)
-                      - ALIGN(size) 
+                      - ALLOC_SIZE(size) 
                       - ALIGN(sizeof(Header))
                       - ALIGN(sizeof(Footer));
 
@@ -235,15 +249,15 @@ split(Header* ab, uint64_t size)
 
   // 3.1 add footer to the ab section
   Footer* new_footer = (char*)ab + ALIGN(size) + sizeof(Header);
-  *new_footer = ALIGN(size);
+  *new_footer = ALLOC_SIZE(size);
 
   // 3.2 add Header for the new block
   Header* header = (char*)new_footer + ALIGN(sizeof(Footer));
-  header->flags = ALIGN(rem_size);
+  header->flags = ALLOC_SIZE(rem_size);
 
   // 3.3 update footer
   Footer* old_footer = (char*)ab +  ALIGN(ab->flags & ~1) + ALIGN(sizeof(Header));
-  *old_footer = ALIGN(rem_size);
+  *old_footer = ALLOC_SIZE(rem_size);
 
   // 3.4 Add block
   blk_insert(rem_size, header);
@@ -323,8 +337,11 @@ void*
 seg_malloc(size_t size)
 {
   assert(size > 0);
-  void* ptr = (void*)((char*)search_fb(size) + ALIGN(sizeof(Header)));
-  blk_alloc(search_fb(size), size);
+  Header* header = search_fb(size);
+  void* ptr = (void*)((char*)header + ALIGN(sizeof(uint64_t)));
+
+  blk_alloc(header, size);
+
   return ptr;
 }
 

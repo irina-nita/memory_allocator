@@ -17,19 +17,11 @@
 extern "C" {
 #endif /* __cplusplus */
 
-typedef struct header Header;
-typedef size_t Footer;
-
-struct header {
-  uint64_t flags; /* size & last two bits for flags */
-  Header* next;
-  Header* prev;
-};
-
+/* defines for size */
 #define ALIGNMENT 8
 #define ALIGN(x) (((x) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 
-#define MIN_SIZE 8
+#define MIN_SIZE 16
 #define MIN_SIZE_BLOCK (ALIGN((sizeof(Header)) + (sizeof(Footer)) + (MIN_SIZE)))
 
 #define MAX_SIZE 1024
@@ -37,30 +29,61 @@ struct header {
 
 #define PAGE_SIZE ((uint64_t)sysconf(_SC_PAGESIZE))
 
-#define BUCKET_INDEX(x) (((x) != PAGE_SIZE) ? (uint64_t)(log2((x) >> 3)) : 8)
 #define HEADER_SIZE (ALIGN(sizeof(Header)))
 #define FOOTER_SIZE (ALIGN(sizeof(Footer)))
 
-#define HEAP_INC(x) (ALIGN(x) + HEADER_SIZE + FOOTER_SIZE)
+#define ALLOC_SIZE(x) (((x) < 16) ? 16 : ALIGN(x))
+#define HEAP_INC(x) (ALLOC_SIZE(x) + HEADER_SIZE + FOOTER_SIZE - (16))
 
-#define NUM_BUCKETS 9 /* {8, 16, 32, 64, 128, 256, 512, 1024, 1025-inf} */
+/* defines for buckets */
+#define NUM_BUCKETS 8 /* {16, 32, 64, 128, 256, 512, 1024, 1025-inf} */
+#define BUCKET_INDEX(x) ((ALLOC_SIZE(x) != PAGE_SIZE) ? (uint64_t)(log2((x) >> 3)) : 8)
 
-extern Header* buckets[NUM_BUCKETS];
-
-/* checks for bucket correspondence */
-#define BUCKET_8(x) ((x) <= 8)
-#define BUCKET_16(x) ((x) > 8 && (x) <= 16)
-#define BUCKET_32(x) ((x) > 16 && (x) <= 32)
-#define BUCKET_64(x) ((x) > 32 && (x) <= 64)
-#define BUCKET_128(x) ((x) > 32 && (x) <= 128)
-#define BUCKET_512(x) ((x) > 128 && (x) <= 512)
-#define BUCKET_1024(x) ((x) > 512 && (x) <=1024)
+#define BUCKET_16(x) ((x) <= 16)
 #define BUCKET_PAGE(x) ((x) > 1024) /* -> 4096 */
 
 #define BUCKET(x, l, r) ((x) > (l) && x <= (r))
 
 #define PAGES(x) ((ceil)((x) / PAGE_SIZE) + 1)
-void     mem_init();
+
+/** free block header
+23               14               7             0
+| --------------- | ------------- | ----------- |
+| header.flags    | header.next   | header.prev |
+|(size      | f/a)|               |             |
+| --------------- | ------------- | ----------- |
+*/
+
+typedef struct header Header;
+
+struct header {
+  uint64_t flags; /* size & last two bits for flags */
+  Header* next;
+  Header* prev;
+};
+
+/** allocated block header
+7            0
+| flags      |
+|(size | f/a)|
+| ---------- |
+*/
+
+/** footer
+7            0
+| flags      |
+|(size | f/a)|
+| ---------- |
+*/
+
+typedef size_t Footer;
+
+/**
+| buckets[0] | ------> | free block <= 8 bytes | ------> | free block <= 8 bytes |
+|            | <------ |                       | <------ |                       |
+*/
+
+extern Header* buckets[NUM_BUCKETS];
 
 uint64_t bucket(uint64_t size);
 
@@ -81,8 +104,6 @@ Header*  search_fb(uint64_t size);
 
 uint8_t  check_next_free(Header* fb);
 uint8_t  check_prev_free(Header* fb);
-
-
 
 #ifdef __cplusplus
 }
