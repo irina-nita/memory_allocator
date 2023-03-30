@@ -33,11 +33,11 @@ extern "C" {
 #define FOOTER_SIZE (ALIGN(sizeof(Footer)))
 
 #define ALLOC_SIZE(x) (((x) < 16) ? 16 : ALIGN(x))
-#define HEAP_INC(x) (ALLOC_SIZE(x) + HEADER_SIZE + FOOTER_SIZE - (16))
+#define HEAP_INC(x) (ALLOC_SIZE(x) + sizeof(uint64_t) + FOOTER_SIZE)
 
 /* defines for buckets */
 #define NUM_BUCKETS 8 /* {16, 32, 64, 128, 256, 512, 1024, 1025-inf} */
-#define BUCKET_INDEX(x) ((ALLOC_SIZE(x) != PAGE_SIZE) ? (uint64_t)(log2((x) >> 3)) : 8)
+#define BUCKET_INDEX(x) (ALLOC_SIZE(x) != PAGE_SIZE) ? ((uint64_t)log2(x) - 4)  : 7
 
 #define BUCKET_16(x) ((x) <= 16)
 #define BUCKET_PAGE(x) ((x) > 1024) /* -> 4096 */
@@ -84,6 +84,10 @@ typedef size_t Footer;
 */
 
 extern Header* buckets[NUM_BUCKETS];
+/* keep track of start of heap and end of heap */
+
+extern void* heap_start;
+extern void* heap_end;
 
 uint64_t bucket(uint64_t size);
 
