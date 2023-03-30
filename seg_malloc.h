@@ -22,7 +22,7 @@ extern "C" {
 #define ALIGN(x) (((x) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 
 #define MIN_SIZE 16
-#define MIN_SIZE_BLOCK (ALIGN((sizeof(Header)) + (sizeof(Footer)) + (MIN_SIZE)))
+#define MIN_SIZE_BLOCK (ALIGN((sizeof(Header)) + (sizeof(Footer))))
 
 #define MAX_SIZE 1024
 #define MAX_SIZE_BLOCK (ALIGN(sizeof(Header)) + (sizeof(Footer)) + (MAX_SIZE))

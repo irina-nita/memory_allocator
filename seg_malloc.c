@@ -51,6 +51,8 @@ blk_insert(uint64_t size, Header* new_blk)
       sbrk(HEAP_INC(size)) :
       mmap(NULL, (size_t)PAGES(size), PROT_READ | PROT_WRITE, MAP_ANON, -1, 0);
       assert(new_blk != NULL);
+    printf("YOU'RE ON THE RIGHT TRACK, KEEP GOING....\n");
+    printf("YOUR MEMORY ADDRESS FOR FREE BLOCK IS: %p\n", new_blk);
   }
 
   /* insert new_blk as head of bucket */
@@ -58,11 +60,17 @@ blk_insert(uint64_t size, Header* new_blk)
 
     new_blk->next = new_blk;
     new_blk->prev = new_blk; 
-    new_blk->flags = ALLOC_SIZE(size); 
-   
+    new_blk->flags = ALLOC_SIZE(size);
+
+    printf("YOUR HEADER IS AT ADDRESS: %p AND THE FLAGS ARE %lu\n", &(new_blk->flags), new_blk->flags);
+
     /* add the footer */
-    *(Footer* )((char* )new_blk + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALLOC_SIZE(size);
+    Footer* footer = (Footer* )((char* )new_blk + HEAP_INC(size) - FOOTER_SIZE);
+    *footer = *footer ^ *footer;
+    *footer = (Footer) ALLOC_SIZE(size);
     
+    printf("YOUR FOOTER IS AT ADDRESS %p AND THE FLAGS ARE %lu\n", footer, *footer);
+
     buckets[BUCKET_INDEX(bkt)] = new_blk;
 
     return new_blk;
@@ -94,15 +102,24 @@ blk_remove(Header* free_blk)
   /* get bucket for given size */ 
   uint64_t size = free_blk->flags & ~1;
   uint64_t bkt = bucket(size);
+  
+  printf("NOW REMOVING FROM THE FREE LIST SO WE KNOW IT'S ALLOCATED...");
 
   if (free_blk == buckets[BUCKET_INDEX(bkt)]) {
     /* it's head */
     buckets[BUCKET_INDEX(bkt)] = (free_blk->next != free_blk) ? free_blk->next : NULL;
+    printf("%p SHOULD BE NULL\n", buckets[BUCKET_INDEX(bkt)]);
+    printf("BUT YOU SHOULDN'T: %p\n", free_blk);
+    free_blk->next = 0x00;
+    free_blk->prev = 0x00;
     return;
   }
   
   free_blk->next->prev = free_blk->prev;
   free_blk->prev->next = free_blk->next;
+  free_blk->next = 0x00;
+  free_blk->prev = 0x00;
+
 }
 
 /* mark block as allocated and rearrange header */
@@ -131,6 +148,9 @@ blk_alloc(Header* fb, uint64_t size)
   /* mark as allocated and update the size of the allocation */
   fb->flags = ALLOC_SIZE(size) | 1;
 
+  printf("ALLOCATING THE BLOCK FOR YOU RN....\n");
+  printf("YOU SHOULD HAVE A BLOCK WITH FLAGS AT %p HAVING %lu AS VALUE\n", &(fb->flags), fb->flags);
+
   /* update footer */
   *(Footer *)((char *)fb + HEAP_INC(size) - FOOTER_SIZE) = (Footer) fb->flags;
   
@@ -140,6 +160,7 @@ blk_alloc(Header* fb, uint64_t size)
   /* todo: return Header* */
 
   /* split if necessary */
+  printf("The size I'm calling this with might be wrong: %lu\n", old_size);
   split(fb, old_size);
 }
 
@@ -163,6 +184,9 @@ search_fb(uint64_t size)
   /* get size of bucket */
   uint64_t bkt = bucket(size);
   assert(bkt > 0);
+ 
+  /* 551 */
+  printf("YOUR BUCKET SIZE IS: %lu\n", bkt);
 
   while (bkt <= MAX_SIZE) {
     /* get list head */
@@ -234,29 +258,34 @@ split(Header* ab, uint64_t size)
   /* 2. if the ALIGN(size) is less then the size
    * todo: we check coalescing_right // rn not doing that, stopping here
    * */
- 
-  uint64_t rem_size = ALIGN(ab->flags & ~1)
-                      - ALLOC_SIZE(size) 
-                      - ALIGN(sizeof(Header))
-                      - ALIGN(sizeof(Footer));
+  
+  printf("SIZE: %lu\n", size);
+  printf("MIN_SIZE_BLOCK: %lu\n", MIN_SIZE_BLOCK);
 
-  if (rem_size < MIN_SIZE) {
+  int remaining = size - MIN_SIZE_BLOCK;
+
+  printf("SOMEHOW I GOT HERE with an overflow ig: %d\n", remaining);
+  if (remaining < 0) {
     return; // NULL
   }
-  
+
+  uint64_t rem_size = (uint64_t)rem_size;
+
+  printf("SOMEHOW I GOT HERE\n");
+ 
   /* 3. if the size is fit, we mark it as a new block and add it to the free list 
    * */
 
   // 3.1 add footer to the ab section
-  Footer* new_footer = (char*)ab + ALIGN(size) + sizeof(Header);
+  Footer* new_footer = (Footer*)((char*)ab + ALIGN(size) + sizeof(Header));
   *new_footer = ALLOC_SIZE(size);
 
   // 3.2 add Header for the new block
-  Header* header = (char*)new_footer + ALIGN(sizeof(Footer));
+  Header* header = (Header* )((char*)new_footer + ALIGN(sizeof(Footer)));
   header->flags = ALLOC_SIZE(rem_size);
 
   // 3.3 update footer
-  Footer* old_footer = (char*)ab +  ALIGN(ab->flags & ~1) + ALIGN(sizeof(Header));
+  Footer* old_footer = (Footer*)((char*)ab +  ALIGN(ab->flags & ~1) + ALIGN(sizeof(Header)));
   *old_footer = ALLOC_SIZE(rem_size);
 
   // 3.4 Add block
@@ -338,8 +367,13 @@ seg_malloc(size_t size)
 {
   assert(size > 0);
   Header* header = search_fb(size);
+
+  printf("I'M IN MALLOC. THE HEADER OF THE BLK IS: %p\n", header);
+  
   void* ptr = (void*)((char*)header + ALIGN(sizeof(uint64_t)));
 
+  printf("I'M IN MALLOC. THE ADDRESS YOU GET SHOULD BE: %p\n", ptr);
+  
   blk_alloc(header, size);
 
   return ptr;
