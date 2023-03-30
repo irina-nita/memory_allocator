@@ -25,8 +25,8 @@ bucket(uint64_t size) {
     return MIN_SIZE;
   }
 
-  for (uint64_t bkt = 8; bkt < MAX_SIZE; bkt << 2) {
-    if (BUCKET(size, bkt, bkt << 2)) {
+  for (uint64_t bkt = 8; bkt < MAX_SIZE; bkt <<= 2) {
+    if (BUCKET(size, bkt, bkt << 2)) { /* verif. align */
       return bkt << 2;
     }
   }
@@ -37,54 +37,80 @@ bucket(uint64_t size) {
   return -1;
 }
 
-void
-blk_insert(uint64_t size, Header* fb)
+
+
+Header*
+blk_insert(uint64_t size, Header* new_blk)
 {
   /* get size of bucket */
   uint64_t bkt = bucket(size);
   assert(bkt > 0);
-
-  /* get the approppriate bucket*/
-  Header* head = buckets[BUCKET_INDEX(bkt)];
   
-  if (head == NULL) {
-    
-    head = (bkt < PAGE_SIZE) ?
+  if (new_blk == NULL) {
+      
+    new_blk = (bkt < PAGE_SIZE) ?
       sbrk(HEAP_INC(size)) :
       mmap(NULL, (size_t)PAGES(size), PROT_READ | PROT_WRITE, MAP_ANON, -1, 0);
+      assert(new_blk != NULL);
     
-    head->next = head;
-    head->prev = head;
-    head->flags = ALIGN(size); /* it's free */
-    
+  }
+
+  if (buckets[BUCKET_INDEX(bkt)] == NULL) {
+
+    new_blk->next = new_blk;
+    new_blk->prev = new_blk; 
+    new_blk->flags = ALIGN(size); 
+   
     /* add the footer */
-    *(Footer *)((char *)head + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+    *(Footer* )((char* )new_blk + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+    
+    buckets[BUCKET_INDEX(bkt)] = new_blk;
+
+    return buckets[BUCKET_INDEX(bkt)];
 
   } else {
     
-    Header* fb = (bkt < PAGE_SIZE) ?
-      sbrk(HEAP_INC(size)) :
-      mmap(NULL, (size_t)PAGES(size), PROT_READ | PROT_WRITE, MAP_ANON, -1, 0);
-    
-    fb->flags = ALIGN(size);
-    fb->prev = head;
-    fb->next = head->next;
-    head->next->prev = fb;
-    head->next = fb;
+    new_blk->flags = ALIGN(size);
+    new_blk->prev = new_blk;
+    new_blk->next = buckets[BUCKET_INDEX(bkt)];
+    buckets[BUCKET_INDEX(bkt)]->prev = new_blk;
+
+    buckets[BUCKET_INDEX(bkt)] = new_blk; 
 
     /* add the footer */
-    *(Footer *)((char *)head + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+    *(Footer *)((char *)new_blk
+      + HEAP_INC(size) - FOOTER_SIZE) = (Footer) ALIGN(size);
+
+    return new_blk;
+
   }
 }
 
+/*
+ * \Header* fb   free block needed to be removed from its free list
+ */
+
 void
-blk_remove(Header *fb)
+blk_remove(Header* free_blk)
 {
-  fb->prev->next = fb->next;
-  fb->next->prev = fb->prev;
-  fb->next = NULL;
-  fb->prev = NULL;
+  /* it's head */
+  uint64_t size = free_blk->flags & ~1;
+  uint64_t bkt = bucket(size);
+
+  if (free_blk == buckets[BUCKET_INDEX(bkt)]) {
+    /* it's head */
+    buckets[BUCKET_INDEX(bkt)] = (free_blk->next != free_blk) ? free_blk->next : NULL;
+    return;
+  }
+  
+  free_blk->next->prev = free_blk->prev;
+  free_blk->prev->next = free_blk->next;
 }
+
+/*
+ * \Header* fb     free block that needs to be allocated -> assigned as alloc
+ * \uint64_t size  the actual size NEEDED from that block to be allocated
+ */
 
 void
 blk_alloc(Header* fb, uint64_t size)
@@ -96,14 +122,216 @@ blk_alloc(Header* fb, uint64_t size)
   fb->flags = ALIGN(size) | 1;
 
   /* update footer */
-  *(Footer *)((char *)head + HEAP_INC(size) - FOOTER_SIZE) = (Footer) fb->flags;
+  *(Footer *)((char *)fb + HEAP_INC(size) - FOOTER_SIZE) = (Footer) fb->flags;
   
   /* remove from free list */
   blk_remove(fb);
   
+  /* todo: return Header* */
+
   /* split if necessary */
   split(fb, old_size);
 }
 
+Header*
+blk_dealloc(Header* ab)
+{
+  /* mark as free */
+  ab->flags &= ~1;
+  ab = blk_insert(ab->flags, ab);
+  return coalesce(ab);
+}
+
+/*
+ * \uint64_t size   minimum size of the free block needed
+ * \Header*         free block found in free list
+ */
+
+Header*
+search_fb(uint64_t size)
+{
+  /* get size of bucket */
+  uint64_t bkt = bucket(size);
+  assert(bkt > 0);
+
+  while (bkt <= MAX_SIZE) {
+    /* get list head */
+    Header* head = buckets[BUCKET_INDEX(bkt)];
+  
+    Header* ptr = head;
+    /* search for free block */
+    for (; ptr->next != NULL; ptr = ptr->next) {
+      if (size < (ptr->flags & ~1)) {
+        return ptr; /* will need to blk_alloc(this) */
+      }
+    }
+
+    bkt <<= 2;
+  }
+
+  /* if not found in free list, ask from the OS for more memory */
+  return blk_insert(size, NULL);
+}
+
+/*
+ * \Header* fb     a free memory block
+ * \return         if the previous block is free or allocated
+ */
+
+uint8_t
+check_prev_free(Header* fb)
+{
+  Footer prev_footer = *(Footer*)((char*)fb - FOOTER_SIZE);
+  if (prev_footer & 1) {
+    return 0;
+  }
+  return 1;
+}
+
+/*
+ * \Header* fb     a free memory block
+ * \return         if the next block is free or allocated
+ */
+
+uint8_t
+check_next_free(Header* fb)
+{
+  uint64_t size = fb->flags & ~1;
+  uint64_t next_header_flags = *(uint64_t*)((char*)fb + ALIGN(size) +  ALIGN(sizeof(Footer)));
+
+  if (next_header_flags & 1) {
+    return 0;
+  }
+
+  return 1;
+}
+
+/*
+ * \Header* ab      the free block just allocated
+ * \uint64_t size   the size needed to be allocated to that block
+ */
+
+void
+split(Header* ab, uint64_t size)
+{
+  /* 1. check if it has the right size left
+   * (ALIGN THE SIZE TO 8 BYTES) to split */
+  
+  /* 2. if the ALIGN(size) is less then the size
+   * todo: we check coalescing_right // rn not doing that, stopping here
+   * */
+ 
+  uint64_t rem_size = ALIGN(ab->flags & ~1)
+                      - ALIGN(size) 
+                      - ALIGN(sizeof(Header))
+                      - ALIGN(sizeof(Footer));
+
+  if (rem_size < MIN_SIZE) {
+    return; // NULL
+  }
+  
+  /* 3. if the size is fit, we mark it as a new block and add it to the free list 
+   * */
+
+  // 3.1 add footer to the ab section
+  Footer* new_footer = (char*)ab + ALIGN(size) + sizeof(Header);
+  *new_footer = ALIGN(size);
+
+  // 3.2 add Header for the new block
+  Header* header = (char*)new_footer + ALIGN(sizeof(Footer));
+  header->flags = ALIGN(rem_size);
+
+  // 3.3 update footer
+  Footer* old_footer = (char*)ab +  ALIGN(ab->flags & ~1) + ALIGN(sizeof(Header));
+  *old_footer = ALIGN(rem_size);
+
+  // 3.4 Add block
+  blk_insert(rem_size, header);
+}
+
+Header*
+coalesce(Header* fb)
+{
+  uint8_t next_free = check_next_free(fb);
+  uint8_t prev_free = check_prev_free(fb);
+
+  /* 1-0 second case */
+  if (next_free && !prev_free) {
+    return coalesce_next(fb);
+  }
+  
+  /* 0-1 third case */
+  if (!next_free && prev_free) {
+    return coalesce_prev(fb);
+  }
+
+  /* 1-1 fourth case */
+  if (next_free && prev_free) {
+    return coalesce_next(coalesce_prev(fb));
+  }
+
+    /* 0-0 first case */
+    return NULL;
+}
+
+Header*
+coalesce_next(Header* fb)
+{
+  Header* next_blk = (Header*)((char* )fb + ALIGN(sizeof(Header))
+                    + ALIGN(fb->flags & ~1)
+                    + ALIGN(sizeof(Footer)));
+
+  Footer* next_footer = (Footer*)((char*)next_blk
+                      + ALIGN(next_blk->flags & ~1)
+                      + ALIGN(sizeof(Header)));
+
+  uint64_t new_size = ALIGN(sizeof(Header) + sizeof(Footer))
+                      + (fb->flags & ~1) + (next_blk->flags & ~1);
+  fb->flags = new_size;
+  *next_footer = new_size;
+
+  blk_remove(next_blk);
+  blk_remove(fb);
+  blk_insert(new_size, fb);
+  return fb;
+}
 
 
+Header*
+coalesce_prev(Header* fb)
+{
+  uint64_t prev_blk_size = *(Footer*) ((char*)fb - ALIGN(sizeof(Footer))) & ~1;
+  Header* prev_blk = (Header*) ((char*)fb
+                      - ALIGN(sizeof(Header))
+                      - ALIGN(prev_blk_size)
+                      - ALIGN(sizeof(Footer)));
+  uint64_t new_size = ALIGN(sizeof(Header))
+                              + ALIGN(sizeof(Footer))
+                              + ALIGN(fb->flags & ~1)
+                              + ALIGN(prev_blk_size);
+
+  Header* new_header = prev_blk;
+  new_header->flags = new_size;
+
+  blk_remove(prev_blk);
+  blk_remove(fb);
+  blk_insert(new_size, new_header);
+  return new_header;
+}
+
+void*
+seg_malloc(size_t size)
+{
+  assert(size > 0);
+  void* ptr = (void*)((char*)search_fb(size) + ALIGN(sizeof(Header)));
+  blk_alloc(search_fb(size), size);
+  return ptr;
+}
+
+void
+seg_free(void *ptr)
+{
+  assert(ptr != NULL);
+  Header* header = (Header*)((char*)ptr - ALIGN(sizeof(Header)));
+  blk_dealloc(header);
+}

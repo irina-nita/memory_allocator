@@ -27,7 +27,7 @@ struct header {
 };
 
 #define ALIGNMENT 8
-#define ALIGN(x) ((x) & ~(ALIGNMENT - 1))
+#define ALIGN(x) (((x) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 
 #define MIN_SIZE 8
 #define MIN_SIZE_BLOCK (ALIGN((sizeof(Header)) + (sizeof(Footer)) + (MIN_SIZE)))
@@ -64,7 +64,7 @@ void     mem_init();
 
 uint64_t bucket(uint64_t size);
 
-void     blk_insert(uint64_t size, Header* fb);
+Header*  blk_insert(uint64_t size, Header* new_blk);
 void     blk_remove(Header* fb);
 void     blk_alloc(Header* fb, uint64_t size);
 Header*  blk_dealloc(Header* ab);
@@ -73,9 +73,15 @@ void*    seg_malloc(size_t size);
 void     seg_free(void* ptr);
 
 Header*  coalesce(Header* fb);
+Header*  coalesce_next(Header* fb);
+Header*  coalesce_prev(Header* fb);
 void     split(Header* ab, uint64_t size);
 
 Header*  search_fb(uint64_t size);
+
+uint8_t  check_next_free(Header* fb);
+uint8_t  check_prev_free(Header* fb);
+
 
 
 #ifdef __cplusplus
