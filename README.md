@@ -33,7 +33,6 @@
   be split nor coalesced.
 ```
 ```c
-/*************************************************************************************************/
   - split
   Upon finding a block in free list that has at least 32 bytes left free after allocating the block
   of needed size, the remaining block is initialized as free and is added to the corresponding
@@ -53,8 +52,8 @@
     	| size      | payload | padding  | footer  | header   | payload | padding  | footer  |
     	| --------- | ------------------ | ------- | -------- | ------------------ | ------- |
 
-     
-/*************************************************************************************************/
+```
+```c
   - coalescing
   Upon freeing a block, a safe check (between heap_start and heap_end) is made for free blocks
   surrounding (in terms of address). The blocks are coalesced as a new free block, for fragmentation
