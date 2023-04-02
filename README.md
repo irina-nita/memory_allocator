@@ -1,9 +1,9 @@
 # Memory Allocator - Segregated List Approach
 ## 1. About the implementation
 ```c
-  Simple implementation of malloc, realloc, calloc and free using segregated free list, using an
-  array of free lists. Each array contains blocks of the same class size (i.e. power of two). The
-  "Small" classes have sizes ranging from 16 to 1024 bytes. They are allocated using the sbrk
+  Simple implementation of malloc, realloc, calloc and free using the segregated free list
+  approach (an array of free lists). Each array contains blocks of the same class size (power of two).
+  The "Small" classes have sizes ranging from 16 to 1024 bytes. They are allocated using the sbrk
   system call and can be split and coalesced upon allocating/deallocating to prevent fragmentation.
   
   The "Big" class has sizes larger than 1024 bytes. They are allocated/deallocated using
